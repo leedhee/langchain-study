@@ -1,6 +1,6 @@
 """
 의료용 Agent가 사용할 도구 정의
-1. 증상(질병) 정보 검색 tool : analyze_symptom
+1. 증상(질병) 정보 검색 tool : analyze_symptom (Elasticsearch Retriever 사용)
 2. 약 정보 검색 tool : analyze_medicine
 3. 병원 검색 tool : search_hospital
 """
@@ -10,10 +10,62 @@ import httpx
 import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 from typing import Optional
+from elasticsearch import Elasticsearch
+from langchain_elasticsearch import ElasticsearchRetriever
 
 load_dotenv()
+
 SERVICE_KEY = os.getenv("PUBLIC_DATA_API_KEY")
 
+# -----------------------------
+# Elasticsearch 설정
+# - 증상 관련 데이터는 Elasticsearch 인덱스에서 검색
+# - 접속 정보와 검색 설정은 .env에서 로드
+# -----------------------------
+ES_URL = os.getenv("ES_URL")
+ES_USER = os.getenv("ES_USER")
+ES_PASSWORD = os.getenv("ES_PASSWORD")
+INDEX_NAME = os.getenv("INDEX_NAME")
+CONTENT_FIELD = os.getenv("CONTENT_FIELD", "content")
+TOP_K = int(os.getenv("TOP_K", "3"))
+
+_retriever: ElasticsearchRetriever | None = None
+
+def symptom_query_builder(query: str) -> dict:
+    """증상 검색용 Elasticsearch Query DSL을 생성합니다."""
+    return {
+        "size": TOP_K,
+        "query": {
+            "match": {
+                CONTENT_FIELD: query
+            }
+        }
+    }
+
+
+def _build_retriever() -> ElasticsearchRetriever:
+    """Elasticsearch Retriever를 생성합니다."""
+    if not ES_URL or not ES_USER or not ES_PASSWORD or not INDEX_NAME:
+        raise ValueError(
+            "Elasticsearch 환경변수(ES_URL, ES_USER, ES_PASSWORD, INDEX_NAME)가 설정되지 않았습니다."
+        )
+
+    return ElasticsearchRetriever(
+        es_url=ES_URL,
+        es_user=ES_USER,
+        es_password=ES_PASSWORD,
+        index_name=INDEX_NAME,
+        body_func=symptom_query_builder,
+        content_field=CONTENT_FIELD,
+    )
+
+
+def _get_retriever() -> ElasticsearchRetriever:
+    """Retriever를 필요할 때 한 번만 생성하고 재사용합니다."""
+    global _retriever
+    if _retriever is None:
+        _retriever = _build_retriever()
+    return _retriever
 
 # -----------------------------
 # 공통 유틸
@@ -154,69 +206,40 @@ def _resolve_subject_code(subject_name: Optional[str]) -> Optional[str]:
 # 1. 증상(질병) 정보 검색 tool
 # -----------------------------
 def analyze_symptom(symptom_name: str) -> str:
-    """증상 또는 질병명 키워드로 질병 정보를 검색합니다.
+    """Elasticsearch 인덱스에서 증상 또는 질병명 키워드로 관련 문서를 검색합니다.
     사용자가 증상, 질병명, 관련 상병 정보를 물을 때 사용합니다.
     병원 검색이나 약 효능 검색 질문에는 사용하지 않습니다.
     """
-
-    url = "https://apis.data.go.kr/B551182/diseaseInfoService1/getDissNameCodeList1"
-    params = {
-        "ServiceKey": SERVICE_KEY,
-        "pageNo": "1",
-        "numOfRows": "5",
-        "sickType": "1",          # 상병 구분
-        "medTp": "1",             # 1: 의과, 2: 한방
-        "diseaseType": "SICK_NM", # 질병명으로 검색
-        "searchText": symptom_name,
-    }
-
     try:
-        response = httpx.get(url, params=params, timeout=20.0)
-        response.raise_for_status()
-    except httpx.ReadTimeout:
-        return "증상 정보 조회 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
-    except httpx.HTTPStatusError as e:
-        status_code = e.response.status_code if e.response else None
-        return f"증상 정보 조회 중 오류가 발생했습니다. (상태코드: {status_code})"
-    except httpx.HTTPError as e:
-        return f"증상 정보 조회 중 오류가 발생했습니다: {e}"
+        retriever = _get_retriever()
+        docs = retriever.invoke(symptom_name)
+    except Exception as e:
+        return f"증상 정보 검색 중 Elasticsearch 오류가 발생했습니다: {e}"
 
-    try:
-        root = ET.fromstring(response.text)
-    except ET.ParseError:
-        return "증상 정보 응답을 해석하지 못했습니다."
-
-    items = root.findall(".//item")
-
-    if not items:
-        return f"'{symptom_name}'와(과) 관련된 질병 정보를 찾지 못했습니다."
+    if not docs:
+        return f"'{symptom_name}'와(과) 관련된 증상 정보를 찾지 못했습니다."
 
     results = []
-    seen = set()
+    for doc in docs[:TOP_K]:
+        content = (doc.page_content or "").strip()
+        metadata = doc.metadata or {}
 
-    for item in items:
-        sick_cd = _safe_text(item.findtext("sickCd"), "상병코드 정보 없음")
-        sick_nm = _safe_text(item.findtext("sickNm"), "질병명 정보 없음")
-        eng_nm = _safe_text(item.findtext("engSickNm"))
-        med_tp = _safe_text(item.findtext("medTpNm"))
+        lines = []
+        title = metadata.get("title")
+        if title:
+            lines.append(f"제목: {title}")
+        if content:
+            lines.append(f"내용: {content}")
 
-        lines = [
-            f"질병명: {sick_nm}",
-            f"상병코드: {sick_cd}",
-        ]
-
-        if eng_nm:
-            lines.append(f"영문명: {eng_nm}")
-        if med_tp:
-            lines.append(f"구분: {med_tp}")
-
-        result_text = "\n".join(lines)
-
-        if result_text not in seen:
-            seen.add(result_text)
+        result_text = "\n".join(lines).strip()
+        if result_text:
             results.append(result_text)
 
-    return "\n\n".join(results[:5])
+    if not results:
+        return f"'{symptom_name}'와(과) 관련된 증상 정보를 찾았지만 표시할 내용이 없습니다."
+
+    return "\n\n".join(results)
+
 
 
 # -----------------------------
