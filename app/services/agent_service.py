@@ -2,13 +2,12 @@ import asyncio
 import contextlib
 from datetime import datetime
 import json
-from typing import Optional
 import uuid
-
 from app.utils.logger import log_execution, custom_logger
-
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
+from langgraph.checkpoint.memory import InMemorySaver
+from app.agents.medicine_agent import create_medicine_agent
 
 
 class AgentService:
@@ -16,15 +15,24 @@ class AgentService:
         # IMP: LangChain을 통해 사용할 LLM(OpenAI) 객체 초기화 구현. 에이전트의 두뇌 역할을 합니다.
         self.agent = None
         self.progress_queue: asyncio.Queue = asyncio.Queue()    # 진행 상황 이벤트를 담아둘 Queue 생성
+        self.checkpointer = self._init_checkpointer()
+        
+        custom_logger.info(f"AgentService created: {id(self)}")
+        custom_logger.info(f"Checkpointer created: {id(self.checkpointer)}")
+
+    def _init_checkpointer(self):
+        return InMemorySaver()
 
     # 실제 agent 객체를 만드는 함수 
-    def _create_agent(self, thread_id: uuid.UUID = None):
+    def _create_agent(self):
         """LangChain 에이전트 생성"""
         # IMP: DeepAgents 라이브러리를 사용하여 LangGraph 기반의 에이전트를 생성하는 구현. 
         # LLM 모델, 사용할 도구(Tools), 시스템 프롬프트, 상태 저장소(Checkpointer), 그리고 응답 포맷(ToolStrategy)을 결합하여 워크플로우를 초기화합니다.
         # Agent 생성
-        from app.agents.dummy import Agent
-        self.agent = Agent()    # dummy.Agent를 생성하여 self.agent에 넣음     
+        # from app.agents.medicine_agent import create_medicine_agent
+        # self.agent = create_medicine_agent()   
+        if self.agent is None:
+            self.agent = create_medicine_agent(checkpointer=self.checkpointer)
 
     # 실제 대화 로직 : 사용자 질문을 받아서 agent를 실행하고, 나온 결과를 chunk 단위로 계속 yeild하는 함수 
     @log_execution
@@ -32,8 +40,11 @@ class AgentService:
         """LangChain Messages 형식의 쿼리를 처리하고 AIMessage 형식으로 반환합니다."""
         try:
             # 에이전트 초기화 (한 번만)
-            self._create_agent(thread_id=thread_id)
+            self._create_agent()
 
+            custom_logger.info(f"AgentService in process_query: {id(self)}")
+            custom_logger.info(f"Checkpointer in process_query: {id(self.checkpointer)}")
+            custom_logger.info(f"쓰레드 아이디: {thread_id}")
             custom_logger.info(f"사용자 메시지: {user_messages}")
 
             # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고, 

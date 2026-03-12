@@ -7,7 +7,7 @@ from app.services.agent_service import AgentService
 from fastapi.responses import StreamingResponse
 
 chat_router = APIRouter()
-
+agent_service = AgentService()
 
 @chat_router.post("/chat")
 async def post_chat(request: ChatRequest):
@@ -31,7 +31,7 @@ async def post_chat(request: ChatRequest):
             try:
                 yield f'data: {{"step": "model", "tool_calls": ["Planning"]}}\n\n'
                 # 객체 생성 시, __init__() 자동 실행 -> 초기 상태 세팅
-                agent_service = AgentService()
+                # agent_service = AgentService()
                 async for chunk in agent_service.process_query(
                     user_messages=request.message,
                     thread_id=thread_id
