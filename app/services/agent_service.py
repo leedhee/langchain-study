@@ -7,7 +7,7 @@ from app.utils.logger import log_execution, custom_logger
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.checkpoint.memory import InMemorySaver
-from app.agents.medicine_agent import create_medicine_agent
+from app.agents.medical_agent import create_medical_agent
 
 
 class AgentService:
@@ -32,7 +32,7 @@ class AgentService:
         # from app.agents.medicine_agent import create_medicine_agent
         # self.agent = create_medicine_agent()   
         if self.agent is None:
-            self.agent = create_medicine_agent(checkpointer=self.checkpointer)
+            self.agent = create_medical_agent(checkpointer=self.checkpointer)
 
     # 실제 대화 로직 : 사용자 질문을 받아서 agent를 실행하고, 나온 결과를 chunk 단위로 계속 yeild하는 함수 
     @log_execution
