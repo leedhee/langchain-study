@@ -33,8 +33,9 @@ agent/
 │   ├── agents/          # Agent, prompt, tools
 │   ├── api/routes/      # chat, threads API
 │   ├── core/            # config
+│   ├── domain/          # 병원 검색 코드 매핑, resolver
 │   ├── models/          # request/response model
-│   ├── services/        # agent, thread service
+│   ├── services/        # agent, thread, public data, Elasticsearch service
 │   ├── data/            # 샘플 thread/favorite 데이터
 │   └── main.py          # FastAPI 진입점
 ├── tests/
@@ -67,13 +68,14 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Agent 동작 방식
 
-사용자 질문을 분석한 뒤 3개 tool 중 하나를 최대 1회 호출하고, 그 결과를 `ChatResponse` 형식으로 정리해 SSE로 반환합니다.
+사용자 질문을 분석한 뒤 3개 tool 중 하나를 최대 1회 호출하고, 그 결과를 `AgentResponse` 형식으로 정리해 SSE로 반환합니다.
 
 흐름:
 
 - 질문 수신
 - tool 선택
-- 외부 데이터 조회
+- 도메인 resolver로 검색 조건 해석
+- service 계층에서 외부 데이터 조회
 - 최종 답변 생성
 - 스트리밍 응답 반환
 
@@ -82,6 +84,14 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - `analyze_symptom`: Elasticsearch 기반 증상/질병 정보 검색
 - `analyze_medicine`: 공공데이터 의약품 정보 조회
 - `search_hospital`: 공공데이터 병원 정보 조회
+
+구현 구조:
+
+- `app/agents/tools.py`: tool entrypoint와 응답 문자열 포맷팅
+- `app/domain/hospital_codes.py`: 시도/시군구/진료과목 코드 매핑
+- `app/domain/hospital_search_resolver.py`: 지역명, 진료과목명 해석
+- `app/services/public_data_service.py`: 공공데이터 API 호출 및 XML 파싱
+- `app/services/elasticsearch_service.py`: Elasticsearch client/retriever 생성
 
 ## API 명세
 

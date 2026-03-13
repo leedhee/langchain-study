@@ -28,9 +28,7 @@ class AgentService:
         """LangChain 에이전트 생성"""
         # IMP: DeepAgents 라이브러리를 사용하여 LangGraph 기반의 에이전트를 생성하는 구현. 
         # LLM 모델, 사용할 도구(Tools), 시스템 프롬프트, 상태 저장소(Checkpointer), 그리고 응답 포맷(ToolStrategy)을 결합하여 워크플로우를 초기화합니다.
-        # Agent 생성
-        # from app.agents.medicine_agent import create_medicine_agent
-        # self.agent = create_medicine_agent()   
+        # Agent 생성 
         if self.agent is None:
             self.agent = create_medical_agent(checkpointer=self.checkpointer)
 
@@ -117,7 +115,7 @@ class AgentService:
                                 if not tool_calls:
                                     continue
                                 tool = tool_calls[0]
-                                if tool.get("name") == "ChatResponse":
+                                if tool.get("name") == "AgentResponse":
                                     args = tool.get("args", {})
                                     metadata = args.get("metadata")
                                     custom_logger.info("========================================")

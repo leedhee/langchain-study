@@ -7,7 +7,7 @@ from langchain.agents import create_agent
 from app.agents.tools import analyze_symptom, analyze_medicine, search_hospital
 from app.agents.medical_prompt import MEDICAL_AGENT_SYSTEM_PROMPT
 from langchain.agents.structured_output import ToolStrategy
-from app.models.chat import ChatResponse
+from app.models.agent_response import AgentResponse
 
 
 def create_medical_agent(checkpointer=None):
@@ -26,7 +26,7 @@ def create_medical_agent(checkpointer=None):
         model=model,
         tools=tools,
         system_prompt=MEDICAL_AGENT_SYSTEM_PROMPT,
-        response_format=ToolStrategy(ChatResponse),
+        response_format=ToolStrategy(AgentResponse),
         checkpointer=checkpointer,
     )
 
