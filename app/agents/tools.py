@@ -6,7 +6,6 @@
 """
 
 import os
-from typing import Optional
 
 from dotenv import load_dotenv
 from langchain.tools import tool
@@ -24,9 +23,13 @@ TOP_K = int(os.getenv("TOP_K", "3"))
 # -----------------------------
 @tool
 def analyze_symptom(symptom_name: str) -> str:
-    """Elasticsearch 인덱스에서 증상 또는 질병명 키워드로 관련 문서를 검색합니다.
-    사용자가 증상, 질병명, 관련 상병 정보를 물을 때 사용합니다.
-    병원 검색이나 약 효능 검색 질문에는 사용하지 않습니다.
+    """Elasticsearch에서 증상/질병 관련 정보를 검색합니다.
+
+    Args:
+        symptom_name: 사용자가 입력한 증상 또는 질병명 키워드.
+
+    Returns:
+        검색 결과 요약 문자열. 결과가 없거나 오류 시 안내 문구를 반환합니다.
     """
     try:
         medical_retriever = create_es_retriever()
@@ -65,9 +68,13 @@ def analyze_symptom(symptom_name: str) -> str:
 # -----------------------------
 @tool
 def analyze_medicine(medicine_name: str) -> str:
-    """약 이름으로 의약품의 효능, 복용법, 일반적인 주의사항을 검색합니다.
-    약의 기본 정보나 복용 안내가 필요할 때 사용합니다.
-    병원 검색이나 증상/질병 조회 질문에는 사용하지 않습니다.
+    """약 이름으로 의약품 정보를 검색합니다.
+
+    Args:
+        medicine_name: 조회할 의약품 이름.
+
+    Returns:
+        약 이름, 효능, 복용법, 주의사항을 포함한 문자열.
     """
     try:
         items = search_medicine_items(medicine_name)
@@ -92,17 +99,21 @@ def analyze_medicine(medicine_name: str) -> str:
 # -----------------------------
 @tool
 def search_hospital(
-    hospital_name: Optional[str] = None,
-    area: Optional[str] = None,
-    emdong_name: Optional[str] = None,
-    subject_name: Optional[str] = None,
+    hospital_name: str | None = None,
+    area: str | None = None,
+    emdong_name: str | None = None,
+    subject_name: str | None = None,
 ) -> str:
-    """병원명 또는 지역 정보를 기준으로 병원 정보를 검색합니다.
-    - 특정 병원명을 찾을 때는 hospital_name을 사용합니다.
-    - 특정 지역의 병원을 찾을 때는 area를 사용합니다.
-    - 동 단위까지 좁히고 싶을 때는 emdong_name을 사용합니다.
-    - 진료과목 기준 검색이 필요하면 subject_name을 사용합니다.
-    같은 질문에서 반복 호출하지 않습니다.
+    """병원명/지역/진료과목 조건으로 병원을 검색합니다.
+
+    Args:
+        hospital_name: 검색할 병원명(부분 일치).
+        area: 시군구 단위 지역명(예: 강남구, 구로구).
+        emdong_name: 동 이름(예: 역삼동).
+        subject_name: 진료과목명(예: 내과, 정형외과).
+
+    Returns:
+        조건에 맞는 병원 목록 문자열. 결과가 없거나 오류 시 안내 문구를 반환합니다.
     """
     if not hospital_name and not area and not emdong_name and not subject_name:
         return "검색어가 없습니다. 병원명 또는 지역 정보를 입력해주세요."
@@ -154,8 +165,8 @@ def search_hospital(
         condition_text = ", ".join(conditions) if conditions else "입력 조건 없음"
         return f"조건에 맞는 병원 검색 결과가 없습니다. ({condition_text})"
 
-    results = []
-    seen = set()
+    results: list[str] = []
+    seen: set[str] = set()
 
     normalized_area = _normalize_text(area) if area else None
     normalized_emdong = _normalize_text(emdong_name) if emdong_name else None
