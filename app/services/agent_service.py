@@ -2,37 +2,71 @@ import asyncio
 import contextlib
 from datetime import datetime
 import json
+import os
 import uuid
+
+from app.agents.medical_agent import create_medical_agent
+from app.core.config import settings
 from app.utils.logger import log_execution, custom_logger
 from langchain_core.messages import HumanMessage
-from langgraph.errors import GraphRecursionError
 from langgraph.checkpoint.memory import InMemorySaver
-from app.agents.medical_agent import create_medical_agent
+from langgraph.errors import GraphRecursionError
+from opik.integrations.langchain import OpikTracer
+
+# Opik 설정 준비 
+def configure_opik():
+    opik_settings = settings.OPIK
+    if not opik_settings:
+        return None
+
+    if opik_settings.URL_OVERRIDE:
+        os.environ["OPIK_URL_OVERRIDE"] = opik_settings.URL_OVERRIDE
+    if opik_settings.API_KEY:
+        os.environ["OPIK_API_KEY"] = opik_settings.API_KEY
+    if opik_settings.WORKSPACE:
+        os.environ["OPIK_WORKSPACE"] = opik_settings.WORKSPACE
+    if not opik_settings.PROJECT:
+        custom_logger.warning("Opik disabled: project is empty")
+        return None
+
+    return {
+        "project_name": opik_settings.PROJECT,
+        "metadata": {"service": "agent-service"},
+        "tags": ["medical-agent"],
+    }
 
 
 class AgentService:
     def __init__(self):
         # IMP: LangChain을 통해 사용할 LLM(OpenAI) 객체 초기화 구현. 에이전트의 두뇌 역할을 합니다.
         self.agent = None
-        self.progress_queue: asyncio.Queue = asyncio.Queue()    # 진행 상황 이벤트를 담아둘 Queue 생성
+        # 서비스 생성 시점에 Opik 사용 가능 여부를 미리 설정 
+        self.opik_config = configure_opik()
+        # agent 생성 후 초기화 진행 예정 
+        self.opik_tracer = None
+        self.progress_queue: asyncio.Queue = asyncio.Queue()
         self.checkpointer = self._init_checkpointer()
-        
-        custom_logger.info(f"AgentService created: {id(self)}")
-        custom_logger.info(f"Checkpointer created: {id(self.checkpointer)}")
 
     def _init_checkpointer(self):
         return InMemorySaver()
 
-    # 실제 agent 객체를 만드는 함수 
+    # 실제 agent 객체를 만드는 함수
     def _create_agent(self):
         """LangChain 에이전트 생성"""
-        # IMP: DeepAgents 라이브러리를 사용하여 LangGraph 기반의 에이전트를 생성하는 구현. 
+        # IMP: DeepAgents 라이브러리를 사용하여 LangGraph 기반의 에이전트를 생성하는 구현.
         # LLM 모델, 사용할 도구(Tools), 시스템 프롬프트, 상태 저장소(Checkpointer), 그리고 응답 포맷(ToolStrategy)을 결합하여 워크플로우를 초기화합니다.
-        # Agent 생성 
         if self.agent is None:
             self.agent = create_medical_agent(checkpointer=self.checkpointer)
+            if self.opik_config is not None:
+                # OpikTracer 생성 (agent 생성 후)
+                self.opik_tracer = OpikTracer(
+                    project_name=self.opik_config["project_name"],
+                    graph=self.agent.get_graph(xray=True),
+                    metadata=self.opik_config["metadata"],
+                    tags=self.opik_config["tags"],
+                )
 
-    # 실제 대화 로직 : 사용자 질문을 받아서 agent를 실행하고, 나온 결과를 chunk 단위로 계속 yeild하는 함수 
+    # 실제 대화 로직 : 사용자 질문을 받아서 agent를 실행하고, 나온 결과를 chunk 단위로 계속 yeild하는 함수
     @log_execution
     async def process_query(self, user_messages: str, thread_id: uuid.UUID):
         """LangChain Messages 형식의 쿼리를 처리하고 AIMessage 형식으로 반환합니다."""
@@ -45,11 +79,16 @@ class AgentService:
             custom_logger.info(f"쓰레드 아이디: {thread_id}")
             custom_logger.info(f"사용자 메시지: {user_messages}")
 
-            # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고, 
+            # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고,
             # thread_id를 통해 대화 문맥(Context)을 유지하며 비동기 스트리밍(astream)으로 실행하는 구현.
+            # 실행 전, run_config 생성 
+            run_config = {"configurable": {"thread_id": str(thread_id)}}
+            if self.opik_tracer is not None:
+                run_config["callbacks"] = [self.opik_tracer]
+
             agent_stream = self.agent.astream(
                 {"messages": [HumanMessage(content=user_messages)]},
-                config={"configurable": {"thread_id": str(thread_id)}},
+                config=run_config,
                 stream_mode="updates",
             )
 
@@ -72,7 +111,6 @@ class AgentService:
                     except asyncio.CancelledError:
                         progress_task = None
                     except Exception as e:
-                        # progress_task에서 예외 발생 시 로그만 남기고 계속 진행
                         custom_logger.error(f"Error in progress_task: {e}")
                         progress_task = None
 
@@ -83,12 +121,11 @@ class AgentService:
                         agent_task = None
                         break
                     except Exception as e:
-                        # Task에서 발생한 예외 처리
                         custom_logger.error(f"Error in agent_task: {e}")
                         import traceback
+
                         custom_logger.error(traceback.format_exc())
                         agent_task = None
-                        # 에러를 스트리밍으로 전송
                         error_response = {
                             "step": "done",
                             "message_id": str(uuid.uuid4()),
@@ -96,7 +133,7 @@ class AgentService:
                             "content": "처리 중 오류가 발생했습니다. 다시 시도해주세요.",
                             "metadata": {},
                             "created_at": datetime.utcnow().isoformat(),
-                            "error": str(e)
+                            "error": str(e),
                         }
                         yield json.dumps(error_response, ensure_ascii=False)
                         break
@@ -126,9 +163,9 @@ class AgentService:
                             if step == "tools":
                                 yield f'{{"step": "tools", "name": {json.dumps(message.name)}, "content": {message.content}}}'
                     except Exception as e:
-                        # 청크 처리 중 예외 발생
                         custom_logger.error(f"Error processing chunk: {e}")
                         import traceback
+
                         custom_logger.error(traceback.format_exc())
                         error_response = {
                             "step": "done",
@@ -137,7 +174,7 @@ class AgentService:
                             "content": "데이터 처리 중 오류가 발생했습니다.",
                             "metadata": {},
                             "created_at": datetime.utcnow().isoformat(),
-                            "error": str(e)
+                            "error": str(e),
                         }
                         yield json.dumps(error_response, ensure_ascii=False)
                         break
@@ -156,16 +193,19 @@ class AgentService:
                     break
                 yield json.dumps(remaining, ensure_ascii=False)
 
+            if self.opik_tracer is not None:
+                self.opik_tracer.flush()
+
         except Exception as e:
             import traceback
+
             error_trace = traceback.format_exc()
             custom_logger.error(f"Error in process_query: {e}")
             custom_logger.error(error_trace)
-            
-            error_content = f"처리 중 오류가 발생했습니다. 다시 시도해주세요."
+
+            error_content = "처리 중 오류가 발생했습니다. 다시 시도해주세요."
             error_metadata = {}
-            
-            # 에러 응답을 스트리밍으로 전송 (HTTPException 대신)
+
             error_response = {
                 "step": "done",
                 "message_id": str(uuid.uuid4()),
@@ -173,11 +213,11 @@ class AgentService:
                 "content": error_content,
                 "metadata": error_metadata,
                 "created_at": datetime.utcnow().isoformat(),
-                "error": str(e) if not isinstance(e, GraphRecursionError) else None
+                "error": str(e) if not isinstance(e, GraphRecursionError) else None,
             }
             yield json.dumps(error_response, ensure_ascii=False)
 
-    # metadata를 정리해서 dict 형태로 만드는 보조함수 
+    # metadata를 정리해서 dict 형태로 만드는 보조함수
     @log_execution
     def _handle_metadata(self, metadata) -> dict:
         custom_logger.info("========================================")
