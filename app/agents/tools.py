@@ -5,7 +5,9 @@
 3. 병원 검색 tool : search_hospital
 """
 
+import re
 import os
+from difflib import SequenceMatcher
 
 from dotenv import load_dotenv
 from langchain.tools import tool
@@ -17,6 +19,52 @@ load_dotenv()
 
 CONTENT_FIELD = os.getenv("CONTENT_FIELD", "content")
 TOP_K = int(os.getenv("TOP_K", "3"))
+
+
+def _normalize_medicine_name(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", value).lower()
+
+
+def _normalize_medicine_base_name(value: str) -> str:
+    normalized_value = _normalize_medicine_name(value)
+    normalized_value = re.sub(r"\d.*$", "", normalized_value)
+    normalized_value = re.sub(
+        r"(서방정|연질캡슐|캡슐|정|시럽|현탁액|액|주|크림|겔|패치)$",
+        "",
+        normalized_value,
+    )
+    return normalized_value
+
+
+def _build_medicine_correction_notice(requested_name: str, matched_name: str) -> str:
+    normalized_requested = _normalize_medicine_name(requested_name)
+    normalized_matched = _normalize_medicine_name(matched_name)
+    normalized_matched_base = _normalize_medicine_base_name(matched_name)
+
+    if not normalized_requested or not normalized_matched:
+        return ""
+
+    if normalized_requested in normalized_matched:
+        return ""
+
+    similarity_candidates = [
+        SequenceMatcher(None, normalized_requested, normalized_matched).ratio(),
+    ]
+
+    if normalized_matched_base:
+        if normalized_requested in normalized_matched_base:
+            similarity_candidates.append(1.0)
+        similarity_candidates.append(
+            SequenceMatcher(None, normalized_requested, normalized_matched_base).ratio()
+        )
+
+    if max(similarity_candidates) < 0.6:
+        return ""
+
+    return (
+        f"입력하신 '{requested_name}'은(는) 약 이름 오타 또는 표기 차이로 보여 "
+        f"'{matched_name}' 기준으로 안내드립니다.\n\n"
+    )
 
 # -----------------------------
 # 1. 증상(질병) 정보 검색 tool
@@ -85,8 +133,13 @@ def analyze_medicine(medicine_name: str) -> str:
         return f"'{medicine_name}' 의약품 정보를 찾지 못했습니다."
 
     item = items[0]
+    correction_notice = _build_medicine_correction_notice(
+        medicine_name,
+        item["item_name"],
+    )
 
     return (
+        f"{correction_notice}"
         f"약 이름: {item['item_name']}\n"
         f"효능: {item['efcy']}\n\n"
         f"복용법: {item['use_method']}\n\n"

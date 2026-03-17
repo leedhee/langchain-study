@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # IMP: DeepAgents 라이브러리 실행 시 Graph 에이전트의 최대 재귀 호출 횟수(Recursion Limit) 설정
     # DeepAgents 설정
     DEEPAGENT_RECURSION_LIMIT: int = 20
+    MAX_TOOL_CALLS_PER_REQUEST: int = 3
+    MAX_ANALYZE_SYMPTOM_CALLS: int = 1
 
     OPIK: OpikSettings | None = None
     
@@ -40,4 +42,3 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-
