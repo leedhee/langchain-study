@@ -107,8 +107,11 @@ def analyze_symptom(symptom_name: str) -> str:
     if not results:
         return f"'{symptom_name}'와(과) 관련된 증상 정보를 찾았지만 표시할 내용이 없습니다."
 
-    return "\n\n".join(results)
-
+    return ("\n\n".join(results)
+            + "\n\n"
+            + "위 검색 결과를 바탕으로 사용자에게 최종 답변을 생성하세요. "
+            + "추가 검색이나 같은 의미의 재검색은 하지 마세요. "
+    )
 
 
 # -----------------------------

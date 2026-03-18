@@ -4,14 +4,13 @@ from datetime import datetime
 import json
 import os
 import uuid
-
-from app.agents.medical_agent import create_medical_agent
-from app.core.config import settings
 from app.utils.logger import log_execution, custom_logger
 from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
+from langgraph.checkpoint.memory import InMemorySaver
+from app.agents.medical_agent import create_medical_agent
 from opik.integrations.langchain import OpikTracer, track_langgraph
+from app.core.config import settings
 
 # Opik 설정 준비 
 def configure_opik():
@@ -44,17 +43,18 @@ class AgentService:
         self.opik_config = configure_opik()
         # agent 생성 후 초기화 진행 예정 
         self.opik_tracer = None
-        self.progress_queue: asyncio.Queue = asyncio.Queue()
+        self.progress_queue: asyncio.Queue = asyncio.Queue()    # 진행 상황 이벤트를 담아둘 Queue 생성
         self.checkpointer = self._init_checkpointer()
 
     def _init_checkpointer(self):
         return InMemorySaver()
 
-    # 실제 agent 객체를 만드는 함수
+    # 실제 agent 객체를 만드는 함수 
     def _create_agent(self):
         """LangChain 에이전트 생성"""
-        # IMP: DeepAgents 라이브러리를 사용하여 LangGraph 기반의 에이전트를 생성하는 구현.
+        # IMP: DeepAgents 라이브러리를 사용하여 LangGraph 기반의 에이전트를 생성하는 구현. 
         # LLM 모델, 사용할 도구(Tools), 시스템 프롬프트, 상태 저장소(Checkpointer), 그리고 응답 포맷(ToolStrategy)을 결합하여 워크플로우를 초기화합니다.
+        # Agent 생성 
         if self.agent is None:
             agent = create_medical_agent(checkpointer=self.checkpointer)
             if self.opik_config is not None:
@@ -66,22 +66,20 @@ class AgentService:
                 agent = track_langgraph(agent, self.opik_tracer)
             self.agent = agent
 
-    # 실제 대화 로직 : 사용자 질문을 받아서 agent를 실행하고, 나온 결과를 chunk 단위로 계속 yeild하는 함수
+    # 실제 대화 로직 : 사용자 질문을 받아서 agent를 실행하고, 나온 결과를 chunk 단위로 계속 yeild하는 함수 
     @log_execution
     async def process_query(self, user_messages: str, thread_id: uuid.UUID):
         """LangChain Messages 형식의 쿼리를 처리하고 AIMessage 형식으로 반환합니다."""
         try:
             # 에이전트 초기화 (한 번만)
             self._create_agent()
-            tool_call_count = 0
-            analyze_symptom_call_count = 0
 
             custom_logger.info(f"AgentService in process_query: {id(self)}")
             custom_logger.info(f"Checkpointer in process_query: {id(self.checkpointer)}")
             custom_logger.info(f"쓰레드 아이디: {thread_id}")
             custom_logger.info(f"사용자 메시지: {user_messages}")
 
-            # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고,
+            # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고, 
             # thread_id를 통해 대화 문맥(Context)을 유지하며 비동기 스트리밍(astream)으로 실행하는 구현.
             agent_stream = self.agent.astream(
                 {"messages": [HumanMessage(content=user_messages)]},
@@ -108,6 +106,7 @@ class AgentService:
                     except asyncio.CancelledError:
                         progress_task = None
                     except Exception as e:
+                        # progress_task에서 예외 발생 시 로그만 남기고 계속 진행
                         custom_logger.error(f"Error in progress_task: {e}")
                         progress_task = None
 
@@ -118,11 +117,12 @@ class AgentService:
                         agent_task = None
                         break
                     except Exception as e:
+                        # Task에서 발생한 예외 처리
                         custom_logger.error(f"Error in agent_task: {e}")
                         import traceback
-
                         custom_logger.error(traceback.format_exc())
                         agent_task = None
+                        # 에러를 스트리밍으로 전송
                         error_response = {
                             "step": "done",
                             "message_id": str(uuid.uuid4()),
@@ -130,7 +130,7 @@ class AgentService:
                             "content": "처리 중 오류가 발생했습니다. 다시 시도해주세요.",
                             "metadata": {},
                             "created_at": datetime.utcnow().isoformat(),
-                            "error": str(e),
+                            "error": str(e)
                         }
                         yield json.dumps(error_response, ensure_ascii=False)
                         break
@@ -158,47 +158,11 @@ class AgentService:
                                 else:
                                     yield f'{{"step": "model", "tool_calls": {json.dumps([tool["name"] for tool in tool_calls])}}}'
                             if step == "tools":
-                                tool_call_count += 1
-                                if message.name == "analyze_symptom":
-                                    analyze_symptom_call_count += 1
-
-                                custom_logger.info(
-                                    "Tool call counts - total: %s, analyze_symptom: %s",
-                                    tool_call_count,
-                                    analyze_symptom_call_count,
-                                )
-
-                                if tool_call_count > settings.MAX_TOOL_CALLS_PER_REQUEST:
-                                    error_response = {
-                                        "step": "done",
-                                        "message_id": str(uuid.uuid4()),
-                                        "role": "assistant",
-                                        "content": "검색 호출이 반복되어 응답을 중단했습니다. 질문을 조금 더 구체적으로 입력해주세요.",
-                                        "metadata": {},
-                                        "created_at": datetime.utcnow().isoformat(),
-                                        "error": "max_tool_calls_exceeded",
-                                    }
-                                    yield json.dumps(error_response, ensure_ascii=False)
-                                    return
-
-                                if analyze_symptom_call_count > settings.MAX_ANALYZE_SYMPTOM_CALLS:
-                                    error_response = {
-                                        "step": "done",
-                                        "message_id": str(uuid.uuid4()),
-                                        "role": "assistant",
-                                        "content": "증상 검색이 반복되어 응답을 중단했습니다. 증상명이나 궁금한 항목을 더 구체적으로 입력해주세요.",
-                                        "metadata": {},
-                                        "created_at": datetime.utcnow().isoformat(),
-                                        "error": "max_analyze_symptom_calls_exceeded",
-                                    }
-                                    yield json.dumps(error_response, ensure_ascii=False)
-                                    return
-
                                 yield f'{{"step": "tools", "name": {json.dumps(message.name)}, "content": {message.content}}}'
                     except Exception as e:
+                        # 청크 처리 중 예외 발생
                         custom_logger.error(f"Error processing chunk: {e}")
                         import traceback
-
                         custom_logger.error(traceback.format_exc())
                         error_response = {
                             "step": "done",
@@ -207,7 +171,7 @@ class AgentService:
                             "content": "데이터 처리 중 오류가 발생했습니다.",
                             "metadata": {},
                             "created_at": datetime.utcnow().isoformat(),
-                            "error": str(e),
+                            "error": str(e)
                         }
                         yield json.dumps(error_response, ensure_ascii=False)
                         break
@@ -226,19 +190,16 @@ class AgentService:
                     break
                 yield json.dumps(remaining, ensure_ascii=False)
 
-            if self.opik_tracer is not None:
-                self.opik_tracer.flush()
-
         except Exception as e:
             import traceback
-
             error_trace = traceback.format_exc()
             custom_logger.error(f"Error in process_query: {e}")
             custom_logger.error(error_trace)
-
-            error_content = "처리 중 오류가 발생했습니다. 다시 시도해주세요."
+            
+            error_content = f"처리 중 오류가 발생했습니다. 다시 시도해주세요."
             error_metadata = {}
-
+            
+            # 에러 응답을 스트리밍으로 전송 (HTTPException 대신)
             error_response = {
                 "step": "done",
                 "message_id": str(uuid.uuid4()),
@@ -246,11 +207,11 @@ class AgentService:
                 "content": error_content,
                 "metadata": error_metadata,
                 "created_at": datetime.utcnow().isoformat(),
-                "error": str(e) if not isinstance(e, GraphRecursionError) else None,
+                "error": str(e) if not isinstance(e, GraphRecursionError) else None
             }
             yield json.dumps(error_response, ensure_ascii=False)
 
-    # metadata를 정리해서 dict 형태로 만드는 보조함수
+    # metadata를 정리해서 dict 형태로 만드는 보조함수 
     @log_execution
     def _handle_metadata(self, metadata) -> dict:
         custom_logger.info("========================================")
