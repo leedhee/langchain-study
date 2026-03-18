@@ -66,6 +66,49 @@ def _build_medicine_correction_notice(requested_name: str, matched_name: str) ->
         f"'{matched_name}' 기준으로 안내드립니다.\n\n"
     )
 
+
+def _select_best_medicine_item(
+    requested_name: str, items: list[dict[str, str]]
+) -> dict[str, str] | None:
+    normalized_requested = _normalize_medicine_name(requested_name)
+    if not normalized_requested:
+        return items[0] if items else None
+
+    for item in items:
+        if _normalize_medicine_name(item["item_name"]) == normalized_requested:
+            return item
+
+    for item in items:
+        if _normalize_medicine_base_name(item["item_name"]) == normalized_requested:
+            return item
+
+    return None
+
+
+def _build_medicine_disambiguation_message(
+    requested_name: str, items: list[dict[str, str]]
+) -> str:
+    candidate_names: list[str] = []
+    seen: set[str] = set()
+
+    for item in items:
+        item_name = item["item_name"]
+        if item_name in seen:
+            continue
+        seen.add(item_name)
+        candidate_names.append(item_name)
+
+    candidates_text = "\n".join(f"- {name}" for name in candidate_names[:3])
+
+    return (
+        f"'{requested_name}'만으로는 제품을 특정하기 어렵습니다.\n"
+        "동일 브랜드에 성인용, 어린이용, 함량이 다른 제품이 있어 복용량을 하나로 확정할 수 없습니다.\n\n"
+        f"조회된 예시 제품:\n{candidates_text}\n\n"
+        "위 검색 결과만으로 최종 답변을 생성하세요. "
+        "analyze_medicine을 같은 검색어로 다시 호출하지 마세요. "
+        "현재 정보만으로는 확정할 수 없다고 설명하고 제품명 또는 함량 확인이 필요하다고 안내한 뒤 종료하세요."
+    )
+
 # -----------------------------
 # 1. 증상(질병) 정보 검색 tool
 # -----------------------------
@@ -135,7 +178,10 @@ def analyze_medicine(medicine_name: str) -> str:
     if not items:
         return f"'{medicine_name}' 의약품 정보를 찾지 못했습니다."
 
-    item = items[0]
+    item = _select_best_medicine_item(medicine_name, items)
+    if item is None:
+        return _build_medicine_disambiguation_message(medicine_name, items)
+
     correction_notice = _build_medicine_correction_notice(
         medicine_name,
         item["item_name"],
@@ -146,7 +192,10 @@ def analyze_medicine(medicine_name: str) -> str:
         f"약 이름: {item['item_name']}\n"
         f"효능: {item['efcy']}\n\n"
         f"복용법: {item['use_method']}\n\n"
-        f"주의사항: {item['atpn']}"
+        f"주의사항: {item['atpn']}\n\n"
+        "위 검색 결과만으로 최종 답변을 생성하세요. "
+        "analyze_medicine을 같은 검색어로 다시 호출하지 마세요. "
+        "정보가 부족하면 한계를 설명하고 제품명 또는 함량 확인이 필요하다고 안내한 뒤 종료하세요."
     )
 
 
