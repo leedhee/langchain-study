@@ -104,8 +104,6 @@ def _build_medicine_disambiguation_message(
         f"'{requested_name}'만으로는 제품을 특정하기 어렵습니다.\n"
         "동일 브랜드에 성인용, 어린이용, 함량이 다른 제품이 있어 복용량을 하나로 확정할 수 없습니다.\n\n"
         f"조회된 예시 제품:\n{candidates_text}\n\n"
-        "위 검색 결과만으로 최종 답변을 생성하세요. "
-        "analyze_medicine을 같은 검색어로 다시 호출하지 마세요. "
         "현재 정보만으로는 확정할 수 없다고 설명하고 제품명 또는 함량 확인이 필요하다고 안내한 뒤 종료하세요."
     )
 
@@ -152,8 +150,6 @@ def analyze_symptom(symptom_name: str) -> str:
 
     return ("\n\n".join(results)
             + "\n\n"
-            + "위 검색 결과를 바탕으로 사용자에게 최종 답변을 생성하세요. "
-            + "추가 검색이나 같은 의미의 재검색은 하지 마세요. "
     )
 
 
@@ -193,8 +189,6 @@ def analyze_medicine(medicine_name: str) -> str:
         f"효능: {item['efcy']}\n\n"
         f"복용법: {item['use_method']}\n\n"
         f"주의사항: {item['atpn']}\n\n"
-        "위 검색 결과만으로 최종 답변을 생성하세요. "
-        "analyze_medicine을 같은 검색어로 다시 호출하지 마세요. "
         "정보가 부족하면 한계를 설명하고 제품명 또는 함량 확인이 필요하다고 안내한 뒤 종료하세요."
     )
 
