@@ -68,7 +68,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Agent 동작 방식
 
-사용자 질문을 분석한 뒤 3개 tool 중 하나를 최대 1회 호출하고, 그 결과를 `AgentResponse` 형식으로 정리해 SSE로 반환합니다.
+- 에이전트는 일반적으로 2회 이내의 tool 호출로 응답하도록 설계되어 있습니다.
+- 복합 질의에서는 tool을 조합할 수 있습니다.
 
 흐름:
 
