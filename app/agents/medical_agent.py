@@ -21,7 +21,7 @@ def create_medical_agent(checkpointer=None):
         analyze_medicine,
         search_hospital,
     ]
-    
+
     agent = create_agent(
         model=model,
         tools=tools,
