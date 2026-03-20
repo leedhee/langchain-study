@@ -20,7 +20,7 @@ from app.services.agent_service import AgentService
 
 
 DATASET_NAME = "leedhee-dataset"
-EXPERIMENT_NAME = "leedhee-eval-v4"
+EXPERIMENT_NAME = "leedhee-eval-v6"
 
 
 def configure_opik() -> None:
